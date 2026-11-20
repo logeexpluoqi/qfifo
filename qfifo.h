@@ -1,9 +1,10 @@
 /**
- * @ Author: luoqi
- * @ Create Time: 2024-07-17 11:39
- * @ Modified by: luoqi
- * @ Modified time: 2025-07-20 14:36
- * @ Description: Header file for the ring buffer library
+ * Author: luoqi
+ * Created Date: 2026-03-15 17:18:40
+ * Last Modified: 2026-11-21 01:24:24
+ * Modified By: luoqi at <**@****>
+ * Copyright (c) 2026 <*****>
+ * Description:
  */
 
 #ifndef _QFIFO_H_
@@ -16,31 +17,34 @@ extern "C" {
 #include <stddef.h>
 #include <stdbool.h>
 
-#ifndef QFIFO_USE_STDLIBC
-#define QFIFO_USING_STDLIBC_ 0
-#else
-#define QFIFO_USING_STDLIBC_ 1
-#endif
+/* By default the libc <string.h> memcpy is used.
+ * Define QFIFO_LIBC_UNDEPENDENT to use the built-in fallback instead. */
 
 /**
  * @brief Structure representing a kfifo.
  */
 typedef struct {
-    size_t in;          // Write index of the qfifo
-    size_t out;         // Read index of the qfifo
-    size_t sz;          // Total size of the qfifo
-    void  *buf;         // Pointer to the buffer
-    size_t max_used;    // Maximum number of bytes used in the qfifo
-    void (*lock)(bool); // Pointer to the mutex lock function, true for blocking, false for non-blocking
+    volatile size_t in;  // Write index of the qfifo (monotonic, unsigned wrap is safe)
+    volatile size_t out; // Read index of the qfifo (monotonic, unsigned wrap is safe)
+    size_t sz;           // Total size of the qfifo
+    size_t mask;         // sz - 1 when sz is a power of two, otherwise 0
+    void  *buf;          // Pointer to the buffer
+    size_t max_used;     // Maximum number of bytes used in the qfifo
+    /* Optional lock callback: true = lock, false = unlock (may be NULL).
+     * When the fifo is shared with an ISR, the callback MUST be interrupt
+     * safe (e.g. a short critical section). A blocking RTOS mutex such as
+     * tx_mutex_get(..., TX_WAIT_FOREVER) must not be used from an ISR. */
+    void (*lock)(bool);
 } QFifo;
 
 /**
  * @brief Initialize the fifo.
  * @param fifo Pointer to the fifo structure.
  * @param buf Pointer to the buffer.
- * @param sz Size of the buffer.
- * @param mutex_lock Pointer to the mutex lock function.
- * @param mutex_unlock Pointer to the mutex unlock function.
+ * @param sz Size of the buffer (power-of-two sizes use a faster offset path;
+ *           non power-of-two sizes are also supported and kept wrap-safe).
+ * @param lock Optional lock callback, true = lock, false = unlock. May be NULL.
+ *             Must be interrupt safe when the fifo is written from an ISR.
  * @return 0 on success, -1 on failure.
  */
 int qfifo_init(QFifo *fifo, void *buf, size_t sz, void (*lock)(bool));
