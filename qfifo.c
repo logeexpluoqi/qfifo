@@ -62,19 +62,18 @@ static inline bool qfifo_ready(const QFifo *fifo)
  *  physical position - unchanged, while avoiding the 2^32 index wrap where
  *  (2^32 % sz) != 0 would shift the write position relative to the read one.
  *  Power-of-two sizes need no fix-up because 2^32 is a multiple of sz.
- *  Must be called with the lock held. */
+ *  After every call out < sz, and in <= out + sz, so at most one subtraction
+ *  is ever needed: a plain compare-and-subtract avoids a division per write.
+ *  Must be called with the lock held by the side that owns fifo->out. */
 static void qfifo_normalize(QFifo *fifo)
 {
     if(fifo->mask) {
         return;
     }
-    size_t rings = fifo->out / fifo->sz;
-    if(rings == 0) {
-        return;
+    while(fifo->out >= fifo->sz) {
+        fifo->in -= fifo->sz;
+        fifo->out -= fifo->sz;
     }
-    size_t k = rings * fifo->sz;
-    fifo->in -= k;
-    fifo->out -= k;
 }
 
 /** Copy @p sz bytes starting at the read position into @p buf (no state change). */
@@ -173,6 +172,9 @@ size_t qfifo_write(QFifo *fifo, const void *data, size_t sz)
     fifo->in += wsz;
 
     qfifo_update_max(fifo);
+    /* Only the cover path advances out, so only it may normalize; the
+     * non-cover path must never touch out so it stays safe for lock-free
+     * single-producer/single-consumer use. */
     qfifo_normalize(fifo);
 
     if(fifo->lock) {
@@ -220,7 +222,9 @@ size_t qfifo_write_non_cover(QFifo *fifo, const void *data, size_t sz)
     fifo->in += wsz;
 
     qfifo_update_max(fifo);
-    qfifo_normalize(fifo);
+    /* Deliberately no qfifo_normalize() here: this path must not advance out,
+     * otherwise it would no longer be safe for lock-free SPSC use. The read
+     * path keeps the indices bounded instead. */
 
     if(fifo->lock) {
         fifo->lock(false);
@@ -257,6 +261,9 @@ size_t qfifo_read(QFifo *fifo, void *buf, size_t sz)
     /* Read in 1 or 2 contiguous segments */
     qfifo_copy_out(fifo, buf, sz);
     fifo->out += sz;
+    /* A copy step never advances out by more than sz, so a step repeat keeps
+     * in/out below 2*sz on non power-of-two rings. */
+    qfifo_normalize(fifo);
 
     if(fifo->lock) {
         fifo->lock(false);
